@@ -3,3 +3,6 @@
 
 # Test files
 test.txt
+
+# Database files (too large for GitHub)
+*.mdb
