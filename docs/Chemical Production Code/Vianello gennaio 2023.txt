@@ -1,0 +1,25 @@
+Chemical MR
+- creare STD_ID per ogni preparazione ( es. IBAN )
+HANNACODE;STD#;STD VALUE;UNIT;AA00000
+
+- finita la preparation il programma assegna gli ID agli std fatti.
+- crea QRCode e form per visualizzarlo aggiungere in DB acquisition
+ben visibile la parte numerica univoca
+
+
+Chemical QC
+in Reading Set Standard aggiungere campo STD_ID
+- acquisizione barcode STD_ID
+- aggiungere in acquisition + reading table (sempre visibile)
+HANNACODE;STD#;STD VALUE;UNIT;AA00000
+l'ID sarà solo l'ultima parte numerica
+
+ppm&ppb da completare---OK
+
+
+Lotti chiusi > Export Lot Excel + STD_ID
+
+- verificare come si "nascondono" le colonne o le righe
+
+CHEMICAL FORMULATION
+HISTORY sistemare il SEARCH?

@@ -1,0 +1,10 @@
+[Programma]
+ExeName=VerPeriodica.exe
+Nome=VerPeriodica
+
+[Versione]
+Percorso UPDATE=C:\Documents and Settings\Administrator\My Documents\Gibertini\VerPeriodica\update\
+Revision=65
+Minor=0
+Major=4
+Rel.=4.0.65

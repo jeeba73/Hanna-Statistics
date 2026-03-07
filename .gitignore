@@ -1,0 +1,5 @@
+# Claude Code directory
+.claude/
+
+# Test files
+test.txt
