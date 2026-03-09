@@ -46,20 +46,26 @@ Ogni foglio pH ha la stessa struttura identica:
 | E | FIRST QC FAILED (excel record book) | `string/float` | Valore pH primo QC fallito | `1.704`, `pH 4.025` |
 | F | CM USED FOR CORRECTION | `string` | Descrizione materiale correzione | `Potassium Tetraoxalate dihydrate` |
 | G | CM Code | `string` | Codice materiale correzione | `CM011`, `CM480` |
-| H | corr CM [%] | `float` (calcolato) | Percentuale correzione | `0.00052...` |
-| I | corr CM [g] | `float` | Grammi materiale correzione | `120`, `250` |
+| H | Corr Gibertini [%] | `float` | Scostamento % calcolato da Chemical MR (`Variance Perc`) | `0.052`, `0.18` |
+| I | corr CM [%] | `float` (calcolato) | Percentuale correzione (formula Excel locale) | `0.00052...` |
+| J | corr CM [g] | `float` | Grammi materiale correzione (`Variance` da Chemical MR) | `120`, `250` |
 
 **Riga intestazione:** Row 1 = "STATISTIC PRODUCTION", Row 1 Col E = "RECIPE # Cxxx"
 **Riga 2:** Col E = "pH Value: x.xx"
 **Dati iniziano:** Row 5
 
-### 1.3 Formula Chiave
+### 1.3 Formule Chiave
 
 ```
+// Colonna H — generata da Chemical MR (da confermare struttura esatta)
+Corr Gibertini [%] = Variance Perc  (da tabella MR: (MR_Acquired - MR_Qty) / MR_Qty * 100)
+
+// Colonna I — formula Excel locale nel Buffer Statistic
 corr CM [%] = IF(corr_CM_g == 0, "", corr_CM_g / (QUANTITY_KG * 1000))
 ```
 
-Calcola la percentuale del materiale di correzione rispetto al peso totale in grammi.
+`corr CM [%]` calcola la percentuale del materiale di correzione rispetto al peso totale in grammi.
+`Corr Gibertini [%]` è lo scostamento percentuale tra quantità acquisita ed erogata secondo Chemical MR.
 
 ### 1.4 Tabella CM Info (Materiali di Correzione)
 
@@ -233,12 +239,14 @@ Per ciascuno dei 6 standard (STD1-STD6), 7 colonne:
 **Valori per STD3 (35):** Base=10.325, limiti sigma = 1.8575
 **Valori per STD4 (60):** Base=12.0175, limiti sigma = 2.47
 
-#### ZONA F: Medie STD Ripetute (Colonne 116-133)
+#### ZONA F: Medie STD Ripetute (Colonne 116-133) ⚠️ da verificare
 
-Tre blocchi ripetuti di STD1-STD6 AVG (colonne 116-121, 122-127, 128-133). Probabilmente rappresentano:
+Tre blocchi ripetuti di STD1-STD6 AVG (colonne 116-121, 122-127, 128-133). Interpretazione non confermata:
 - Blocco 1: Medie cumulative (stessi valori di zona D)
 - Blocco 2: Medie parziali (valore 0 = non calcolato)
 - Blocco 3: Delta/differenze (valore 0 = non calcolato)
+
+> **Da chiarire con Hanna**: scopo esatto dei tre blocchi ripetuti in ZONA F.
 
 ### 2.5 Formule Chiave del File 2
 
@@ -261,6 +269,113 @@ Tre blocchi ripetuti di STD1-STD6 AVG (colonne 116-121, 122-127, 128-133). Proba
 // Headers dinamici distribuzione
 =CONCATENATE("Std 1 tests distribution( ", C2, " )")
 ```
+
+---
+
+## FILE 3: PREP Files (Chemical Production + Chemical MR)
+
+### 3.1 Panoramica
+
+I file PREP sono i fogli di preparazione per ogni singolo batch di produzione chimica.
+Vengono esportati da **due software distinti** con lo stesso layout fisso:
+- `docs/Excel Example Import files/Chemical Production/` → file Chemical Production
+- `docs/Excel Example Import files/Chemical MR/` → file Chemical MR
+
+**Tre sottotipi — identificabili dal naming:**
+| Sottotipo | Prefisso filename | Software | Descrizione |
+|-----------|------------------|----------|-------------|
+| **CP** (prodotto finito) | `PREP_CP-B{xxx}.*` | Chemical Production | Preparazione reagente finito (ha Hanna Code Table) |
+| **SOL/Buffer** (soluzione intermedia) | `PREP_B{xxx}-SOL.{A\|B}.*`, `PREP_B{xxx}-A/B.*` | **Chemical MR** | Soluzioni buffer pH intermedie |
+| **MR** (standard/reagente via MR) | `PREP_{HannaCode}.MR{xxx}.*` | **Chemical MR** | Standard e reagenti gestiti via Material Requisition |
+
+### 3.2 Convenzione Filename
+
+```
+PREP_{RecipeCode}.{Line}.CTK.{BatchNum}.{WeekNum}.{Year2d}[.LOT_{LotNum}][.x].xlsx
+```
+
+| Parte | Esempio | Descrizione |
+|-------|---------|-------------|
+| RecipeCode | `CP-B051`, `B036-SOL.A` | Codice ricetta |
+| Line | `L56` | Linea produzione |
+| CTK | `CTK` | Costante |
+| BatchNum | `1`, `2` | Numero batch per questa ricetta/settimana |
+| WeekNum | `2`, `10`, `51` | Settimana produzione |
+| Year2d | `2025`, `2024` | Anno |
+| `.LOT_XXXX` | `.LOT_2266` | (opzionale) Lot number assegnato |
+| `.x` | `.x` | (opzionale) Correzione/ricalcolo applicato |
+
+**Esempi:**
+- `PREP_CP-B051.L56.CTK.1.2.2025..xlsx` → recipe CP-B051, batch 1, settimana 2/2025, no lot
+- `PREP_CP-B036.L56.CTK.1.15.2025.LOT_2420..xlsx` → lot 2420 assegnato
+- `PREP_CP-B008.L56.CTK.1.6.2025.LOT_2266.x.xlsx` → lot 2420 + correzione applicata
+
+### 3.3 Struttura File (Layout Fisso)
+
+**Un solo sheet** — nome = filename senza `.xlsx` (troncato a 31 car Excel).
+Tutte le celle di dati sono nella colonna B (col 2) e successive. Col A = sempre None.
+
+| Riga | Contenuto | Note |
+|------|-----------|------|
+| r2 | `"Preparation"` | Header sezione |
+| r4 | `Recipe`, `{code}`, `Line`, `L56 CTK`, `Procedure`, (vuoto), `Rev`, `{rev}`, `Exp`, `{anni}` | Header prodotto |
+| r5 | `Description`, `{nome}`, `Density`, `{val}`, `MaxQty`, `{val}`, `MinQty`, `{val}`, `Multiple`, `{val}`, `Mix`, `{codici mix}` | Parametri ricetta |
+| r9 | `Recipe by`, `{nome}`, `Preparation Date`, `{datetime}`, `# Preparation Week`, `{n}` | Autore e data |
+| r10 | `Planned Preparation Week`, `{ww/yyyy}`, `Preparation Week`, `{ww/yyyy}`, `Planning Reference`, `{ref}` | Settimane |
+| r11 | `Note`, `{testo}`, `Operator`, `{nome}`, `Exp Date`, `{mm/yyyy}` | Operatore e scadenza |
+| r12 (SOL only) | `Preparation Lot (Mix)`, `{numero}` | Lot number interno per soluzioni intermedie |
+| r17 | `"Component Table"` | Header sezione |
+| r18 | `Code`, `Description`, `Cas`, `%`, `Theoretical weight`, `Real weight`, `Variance`, `Variance Perc`, `Real Perc`, `Note`, `Mix` | Headers componenti |
+| r19+ | Righe componenti (variabile) | Una riga per componente |
+| dopo componenti | `TotalWeight (Kg)`, `{val}`, `Real Weight (Kg)`, `{val}`, `Variance (Kg)`, `{val}`, `Variance Perc`, `{val}` | Totali peso Kg |
+| riga successiva | `TotalWeight (L)`, `{val}`, `Real Weight (L)`, `{val}`, `Variance (L)`, `{val}`, `Variance Perc`, `{val}` | Totali peso in litri |
+| variabile | `"Acquisition Table"` | Header sezione acquisti |
+| variabile | `Code`, `Description`, `Cas`, `Real Weight (g)`, `Manufacturer`, `Manufacturer Code`, `Manufacturer Lot`, `Delivery Date`, `Qty Delivered`, `Week Delivery`, `Package`, `Note`, `Operator`, `Acquisition Time`, `Recalculation`, `Added Chemical (in recipe)` | Headers acquisti |
+| variabile | Righe acquisti (variabile, ≥1 per componente, possibili righe multiple per stesso codice con lotti diversi) | Materiali usati con lotto fornitore |
+| variabile (CP only) | `"Hanna Code Table"` | Header sezione output |
+| variabile (CP only) | `Code`, `Product Name`, `Line`, `Volume/Weight`, `(um)`, `Q.ty to produce`, `Lot Number` | Headers prodotti finiti |
+| variabile (CP only) | 1 o più righe (1 Hanna Code = 1 prodotto, ma può avere più prodotti dallo stesso batch) | Prodotti finiti con lot number |
+| ultime righe | `"Preparation Notes"` + `Date`, `Type`, `Description`, `Operator` | Note (solitamente vuote) |
+
+### 3.4 Dati Chiave da Estrarre
+
+**Header (sempre in posizioni fisse):**
+| Campo | Riga | Colonna | Tipo |
+|-------|------|---------|------|
+| Recipe Code | r4 | C | `string` |
+| Revision | r4 | I | `float` |
+| Expiry years | r4 | K | `string` |
+| Description | r5 | C | `string` |
+| Density | r5 | E | `float` |
+| MaxQty, MinQty, Multiple | r5 | G, I, K | `float` |
+| Mix (SOL codes or recipe) | r5 | M | `string` |
+| Recipe by | r9 | C | `string` |
+| Preparation Date | r9 | E | `datetime` |
+| Batch # within week | r9 | G | `int` |
+| Planned Prep Week | r10 | C | `string` (es. `"10/2024"`) |
+| Actual Prep Week | r10 | E | `string` (es. `"10/2024"`) |
+| Planning Reference | r10 | G | `string` |
+| Operator | r11 | D | `string` |
+| Exp Date | r11 | G | `string` (es. `"09/2027"`) |
+| Mix Lot (SOL only) | r12 | C | `int` |
+
+**Hanna Code Table (CP files only, 1+ righe):**
+| Campo | Tipo | Esempio |
+|-------|------|---------|
+| Hanna Code | `string` | `HI3812-0`, `HI772S`, `DEMINERAL 10` |
+| Product Name | `string` | `EDTA Solution` |
+| Volume/Weight + unit | `float` + `string` | `120 ml`, `30 mL`, `100 g` |
+| Q.ty to produce | `int` | `2500`, `4000` |
+| Lot Number | `int` | `2220`, `2281` |
+
+### 3.5 Casi Speciali
+
+1. **Multi-prodotto**: Un batch può generare più Hanna Codes (es. `HI755S` e `HI772S` dallo stesso batch CP-B104)
+2. **Correzione (`.x`)**: Il file con `.x` nel nome indica ricalcolo — colonna `Recalculation` in Acquisition Table ha valore
+3. **Multi-lotto componente**: Lo stesso codice materiale può apparire più volte nell'Acquisition Table con lotti fornitore diversi (batch parziali)
+4. **SOL senza Hanna Code Table**: I file SOL sono solo intermedi; il lot number è in r12 (`Preparation Lot (Mix)`)
+5. **Qty to produce vuota**: Può essere stringa vuota `''` se la quantità non è stata ancora confermata
+6. **Formato settimana**: `ww/yyyy` (es. `51/2024` = settimana 51 anno 2024)
 
 ---
 
@@ -371,7 +486,7 @@ CREATE TABLE qc_readings (
   test_number INT,                          -- progressivo test
   test_type ENUM('VALID','OLD_A','OLD_B','OLD_C','OLD_D',
                  'P_FINAL','P_PROD','ASTM','ASTM_D665',
-                 'EPP_170','EPP_171','EPP_172','EPP_250'),
+                 'EPP_170','EPP_171','EPP_172','EPP_250','OTHER'),
   qc_date DATE,
   qc_time TIME,
   prod_date DATE,
@@ -384,6 +499,8 @@ CREATE TABLE qc_readings (
   meter4_reading DECIMAL(10,4),             -- lettura M4
   meter1_model VARCHAR(30),                 -- 'HI97115', 'Label17'
   meter2_model VARCHAR(30),
+  meter3_model VARCHAR(30),
+  meter4_model VARCHAR(30),
   spectr_abs DECIMAL(10,6),                 -- assorbimento spettrometro
   ph1 DECIMAL(6,3),
   ph2 DECIMAL(6,3),
@@ -476,8 +593,8 @@ CREATE TABLE control_chart_limits (
 | # | Calcolo | Formula | Uso |
 |---|---------|---------|-----|
 | 1 | **Media Cumulativa (Running Avg)** | `AVG(reading) FOR lots 1..N` | Media progressiva per control chart |
-| 2 | **Deviazione Standard** | `STDDEV(readings) FOR std_value` | Sigma per control chart |
-| 3 | **Limiti Sigma** | `mean +/- (n * sigma)` per n=1,2,3 | Linee limite control chart |
+| 2 | **σ (Sigma)** | `σ = 50% × Hanna Tolerance` (valore **fisso** per ogni STD) | Bande sigma control chart — NON è STDDEV statistico |
+| 3 | **Limiti Sigma** | `STD_Value ± (n × σ)` per n=1,2,3 | Bande 1σ/2σ/3σ centrate sul valore nominale dello standard |
 | 4 | **Conteggio per Band** | Count readings in cada band sigma | Distribuzione sigma |
 | 5 | **% per Band** | `count_in_band / total_tests * 100` | Percentuali distribuzione |
 | 6 | **Grand Total Tests** | Somma test per tutti gli standard di un lotto | KPI complessivo |
@@ -554,7 +671,7 @@ function isWithinSpec(reading: number, stdValue: number, config: ProductConfig):
   - +/- 3σ (rosso)
   - Punti lettura effettivi
   - Media mobile cumulativa
-- **Zone colorate**: Verde (<1σ), Giallo (1-2σ), Arancione (2-3σ), Rosso (>3σ)
+- **Zone colorate**: Verde (<1σ), Blu (1-2σ), Giallo (2-3σ), Rosso (>3σ) — da requisiti ufficiali PDF
 - **Uno per ciascun STD** (es. STD1=0, STD2=15, STD3=35, STD4=60)
 
 ```typescript
@@ -567,13 +684,13 @@ const controlChartOption = {
   yAxis: { type: 'value', name: 'Value' },
   visualMap: {
     pieces: [
-      { gt: sigma3High, color: '#FF4444' },    // >3σ rosso
-      { gt: sigma2High, lte: sigma3High, color: '#FFA500' }, // 2-3σ arancio
-      { gt: sigma1High, lte: sigma2High, color: '#FFFF00' }, // 1-2σ giallo
+      { gt: sigma3High, color: '#FF4444' },              // >3σ rosso
+      { gt: sigma2High, lte: sigma3High, color: '#FFFF00' }, // 2-3σ giallo
+      { gt: sigma1High, lte: sigma2High, color: '#4488FF' }, // 1-2σ blu
       { gt: sigma1Low, lte: sigma1High, color: '#44BB44' },  // <1σ verde
-      { gt: sigma2Low, lte: sigma1Low, color: '#FFFF00' },
-      { gt: sigma3Low, lte: sigma2Low, color: '#FFA500' },
-      { lte: sigma3Low, color: '#FF4444' },
+      { gt: sigma2Low, lte: sigma1Low, color: '#4488FF' },   // 1-2σ blu
+      { gt: sigma3Low, lte: sigma2Low, color: '#FFFF00' },   // 2-3σ giallo
+      { lte: sigma3Low, color: '#FF4444' },              // >3σ rosso
     ]
   },
   series: [
@@ -677,16 +794,17 @@ Il sistema deve supportare:
 
 ### Must Have (V1)
 - [ ] Gestione anagrafica prodotti (Hanna Codes) con configurazione standard e sigma
-- [ ] Import dati da Excel (batch e singoli file QC)
+- [ ] Import dati da Excel (batch e singoli file QC da Chemical QC)
 - [ ] Control Chart (Shewhart) per ogni STD di ogni prodotto
 - [ ] Distribuzione Sigma per lotto (stacked bar)
 - [ ] Tabella dati con filtri, ordinamento, export
 - [ ] Dashboard overview con KPI cards
 - [ ] Gestione lotti e letture QC raw
 - [ ] Calcolo automatico medie cumulative e distribuzione sigma
+- [ ] Tracking correzioni buffer — Modulo 2 (import file Chemical MR, cm_percentage, trend, FPY) *(se incluso in scope V1)*
+- [ ] Preparation List — Modulo 3 (import file PREP da Chemical Production + Chemical MR) *(se incluso in scope V1)*
 
 ### Should Have (V2)
-- [ ] Tracking correzioni buffer (cm_percentage, trend)
 - [ ] Confronto tra lotti e tra operatori
 - [ ] Alert automatici per letture fuori 3σ
 - [ ] Export PDF report con grafici

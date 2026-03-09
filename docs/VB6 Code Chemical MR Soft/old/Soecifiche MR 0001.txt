@@ -1,0 +1,59 @@
+STD STORAGE in HannaCode DB aggiungere---OK
+modificare DB QC!!!!!!!!!----OK
+
+-----------------------------------------------------------------
+Pipette preferire Fixed
+le seleziona e mette il codice pipetta a mano.
+------------------------------------------------------------------
+
+
+- Pictograms deriva da Classification---OK
+- RICORDARSI LE DATE IN TABELLA!!!!!----OK
+- MS Type legato a HANNA CODE no MR!!!!!!!!---OK
+Chemicals MR Database FORM ---OK
+- levare MS Type---OK
+- mettere la location---OK
+
+frAddInStock
+se Solido "S" non ho MR Value  MR Unit
+
+Bottle Value = Bottle Q.ty---OK
+
+Bottle Number = # Bottle Arrived---OK
+
+Details : HO Dimenticato Density!!!! sui liquidi, se solidi = 1---OK
+
+MR Stock Unit
+unitΰ di misura dell'inventario---OK
+
+MR Value & MR Unit
+θ la concentrazione
+
+Min.QTY
+la quantitΰ minima dopodichθ il software mi dice che MANCA!!!!---OK
+
+MR EXP
+
+RIDUZIONE GIORNI SCADENZA---OK
+Reduction Exp in Days = cella O2
+nova scadenza = Supplier EXP - RIDUZIONE GIORNI SCADENZA
+
+
+Database Chemical MR---OK
+Physical state dipende da Unit!
+
+Stampare Barcode quando utilizzo un MR e non lo finisco con MR EXP
+
+STD si seleziona HANNA CODE
+
+
+
+μμμμμμμμμ preparation μμμμμμμμμμμμμ
+
+seleziono Ricetta e visualizzo tabella HannaCode ma devo sceglierne 1 oppure seleziono direttamente HannaCode.
+
+
+
+
+
+

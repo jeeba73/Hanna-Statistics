@@ -1,0 +1,14 @@
+MR Lisr_REV.0.4
+
+colonna B se ho più bottiglie dello stesso lotto devo mettere A;B;C;D
+
+MR database come Raw Material
+
+QC Soft Data base AGGIUNGERE CAMPI ARANCIONI A Database QC Soft
+Visualizzate su QC
+utilizzate su MR
+MR DB = QC DB
+modificare QC DB come PREPARATION 2 file 
+
+
+

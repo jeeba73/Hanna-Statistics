@@ -285,14 +285,13 @@ hanna-statistics/
 │   │   └── common/               # Componenti condivisi
 │   │
 │   ├── pages/                    # Pagine (lazy-loaded)
-│   │   ├── Dashboard.tsx         # Dashboard principale
-│   │   ├── ProductionStats.tsx   # Statistiche produzione
-│   │   ├── QualityStats.tsx      # Statistiche QC
-│   │   ├── PackingStats.tsx      # Statistiche confezionamento
-│   │   ├── StockAnalysis.tsx     # Analisi stock/magazzino
-│   │   ├── TrendAnalysis.tsx     # Analisi trend temporali
-│   │   ├── Reports.tsx           # Generazione report
-│   │   ├── DataImport.tsx        # Importazione dati
+│   │   ├── Dashboard.tsx         # Dashboard principale (KPI, alert, overview)
+│   │   ├── ReagentiQC.tsx        # Reagenti QC: Control Chart + Sigma distribution
+│   │   ├── BufferProduction.tsx  # Buffer Production: trend correzioni per pH
+│   │   ├── PreparationList.tsx   # Preparation List: statistiche PREP files
+│   │   ├── TrendAnalysis.tsx     # Analisi trend cross-modulo
+│   │   ├── Reports.tsx           # Generazione report PDF/Excel
+│   │   ├── DataImport.tsx        # Import dati (Chemical QC + Chemical Production)
 │   │   ├── Settings.tsx          # Configurazioni
 │   │   └── Users.tsx             # Gestione utenti
 │   │
@@ -381,12 +380,13 @@ hanna-statistics/
 │   │   ├── connection.ts        # Pool connessioni MariaDB (mysql2)
 │   │   ├── migrations/          # Script migrazione schema
 │   │   │   ├── 001_create_users.sql
-│   │   │   ├── 002_create_production_data.sql
-│   │   │   ├── 003_create_quality_data.sql
-│   │   │   ├── 004_create_packing_data.sql
-│   │   │   ├── 005_create_stock_data.sql
-│   │   │   ├── 006_create_statistics_cache.sql
-│   │   │   └── 007_create_config.sql
+│   │   │   ├── 002_create_hanna_codes.sql
+│   │   │   ├── 003_create_production_lots.sql
+│   │   │   ├── 004_create_qc_readings.sql
+│   │   │   ├── 005_create_sigma_cache.sql
+│   │   │   ├── 006_create_buffer_production.sql
+│   │   │   ├── 007_create_preparation_batches.sql
+│   │   │   └── 008_create_config.sql
 │   │   └── seed/                # Dati iniziali
 │   │       ├── default_users.sql
 │   │       └── default_config.sql
@@ -417,8 +417,7 @@ hanna-statistics/
 │   └── migrate.ts               # Runner migrazioni
 │
 ├── components.json               # Configurazione shadcn/ui
-├── tailwind.config.ts            # Configurazione Tailwind CSS (v4: in globals.css)
-├── postcss.config.js             # PostCSS per Tailwind
+├── postcss.config.js             # PostCSS (solo se richiesto da alcuni tool; Tailwind v4 usa Vite plugin)
 ├── vite.config.ts                # Configurazione Vite
 ├── tsconfig.json                 # TypeScript config frontend
 ├── tsconfig.server.json          # TypeScript config server
@@ -702,16 +701,15 @@ USE hanna_statistics;
 
 -- ============================================
 -- UTENTI E AUTENTICAZIONE
--- (Stessa struttura di AuthManager MicroDens)
 -- ============================================
 
 CREATE TABLE users (
     id              INT AUTO_INCREMENT PRIMARY KEY,
     username        VARCHAR(50) UNIQUE NOT NULL,
-    password_hash   VARCHAR(255) NOT NULL,          -- bcryptjs (come MicroDens)
+    password_hash   VARCHAR(255) NOT NULL,
     full_name       VARCHAR(100),
     role            ENUM('admin','manager','operator','viewer') NOT NULL DEFAULT 'viewer',
-    language        VARCHAR(5) DEFAULT 'en',        -- en, it, ro, hu
+    language        VARCHAR(5) DEFAULT 'en',
     is_active       BOOLEAN DEFAULT TRUE,
     last_login      DATETIME,
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -721,7 +719,7 @@ CREATE TABLE users (
 CREATE TABLE audit_log (
     id              INT AUTO_INCREMENT PRIMARY KEY,
     user_id         INT,
-    action          VARCHAR(50) NOT NULL,           -- login, export, import, etc.
+    action          VARCHAR(50) NOT NULL,
     details         JSON,
     ip_address      VARCHAR(45),
     created_at      DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -729,151 +727,226 @@ CREATE TABLE audit_log (
 );
 
 -- ============================================
--- DATI DI PRODUZIONE
--- (Importati o inseriti manualmente)
+-- ANAGRAFICA PRODOTTI (HANNA CODES)
 -- ============================================
 
-CREATE TABLE production_data (
+CREATE TABLE hanna_codes (
     id              INT AUTO_INCREMENT PRIMARY KEY,
-    order_number    VARCHAR(30),
-    product_code    VARCHAR(50) NOT NULL,
-    product_name    VARCHAR(100),
-    line            VARCHAR(10),
-    lot             VARCHAR(30),
-    quantity_planned INT,
-    quantity_produced INT,
-    quantity_rejected INT DEFAULT 0,
-    start_date      DATETIME,
-    end_date        DATETIME,
-    operator        VARCHAR(100),
-    shift           ENUM('morning','afternoon','night'),
-    notes           TEXT,
+    sfg_code        VARCHAR(30) NOT NULL UNIQUE,    -- 'HI782-0', 'HI3812-0'
+    description     VARCHAR(255),                   -- 'Marine Nitrate HR Reagent'
+    parameter_formula VARCHAR(50),                  -- 'NO3', 'pH'
+    recipe          VARCHAR(50),                    -- 'CP-R80', 'CP-B051'
+    production_line VARCHAR(50),                    -- 'L57 Powder', 'L56 CTK'
+    qc_department   VARCHAR(50),
+    registration_book VARCHAR(50),
+    qc_type         VARCHAR(50),
+    product_type    ENUM('REAGENT','BUFFER','OTHER') NOT NULL DEFAULT 'REAGENT',
+    ref_weight_mg   DECIMAL(10,2),                  -- peso riferimento (solo reagenti tablet)
+    ref_weight_min_mg DECIMAL(10,2),
+    ref_weight_max_mg DECIMAL(10,2),
+    created_at      DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Configurazione standard e sigma per prodotto (fino a 6 STD per prodotto)
+CREATE TABLE product_standards (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    hanna_code_id   INT NOT NULL,
+    std_number      TINYINT NOT NULL,               -- 1-6
+    std_value       DECIMAL(10,4) NOT NULL,         -- 0, 15, 35, 60
+    -- σ = 50% Hanna Tolerance (NON deviazione standard statistica)
+    sigma_value     DECIMAL(10,6),                  -- es. 1.3675
+    tolerance_fixed DECIMAL(10,4),                  -- tolleranza fissa assoluta (es. 2.0)
+    tolerance_operator ENUM('AND','OR'),            -- operatore logico tra fixed e percent
+    tolerance_percent DECIMAL(10,4),                -- tolleranza percentuale (es. 4.9)
+    qc_restriction  VARCHAR(50),                    -- '100%', 'Custom QC restriction'
+    ph_value        DECIMAL(6,3),
+    ph_min          DECIMAL(6,3),
+    ph_max          DECIMAL(6,3),
+    FOREIGN KEY (hanna_code_id) REFERENCES hanna_codes(id) ON DELETE CASCADE,
+    UNIQUE KEY uk_hc_std (hanna_code_id, std_number)
+);
+
+-- ============================================
+-- MODULO REAGENTI QC (Chemical QC files)
+-- ============================================
+
+-- Lotti di produzione per reagenti QC
+CREATE TABLE production_lots (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    hanna_code_id   INT NOT NULL,
+    lot_number      VARCHAR(20) NOT NULL,           -- 'LOT0366'
+    lot_sequence    INT,                            -- numero progressivo per grafici
+    preparation_week VARCHAR(20),                   -- 'PWW49.1'
+    first_qc_date   DATE,
+    source_filename VARCHAR(255),                   -- nome file QC sorgente
     imported_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
-    source          VARCHAR(50) DEFAULT 'manual'     -- manual, import, api
+    FOREIGN KEY (hanna_code_id) REFERENCES hanna_codes(id),
+    UNIQUE KEY uk_lot (hanna_code_id, lot_number)
 );
 
-CREATE INDEX idx_prod_date ON production_data(start_date);
-CREATE INDEX idx_prod_product ON production_data(product_code);
-CREATE INDEX idx_prod_line ON production_data(line);
+CREATE INDEX idx_lot_hc ON production_lots(hanna_code_id);
+CREATE INDEX idx_lot_date ON production_lots(first_qc_date);
 
--- ============================================
--- DATI CONTROLLO QUALITA'
--- ============================================
-
-CREATE TABLE quality_data (
+-- Letture QC raw (da Chemical QC files — letture meter per standard)
+CREATE TABLE qc_readings (
     id              INT AUTO_INCREMENT PRIMARY KEY,
-    register_nr     VARCHAR(30),
-    record_date     DATETIME NOT NULL,
-    product_code    VARCHAR(50) NOT NULL,
-    lot             VARCHAR(30),
-    client_code     VARCHAR(20),
-    recipe          VARCHAR(30),
-    qc_type         ENUM('first','during','final') NOT NULL,
-    result          ENUM('pass','fail','pending') DEFAULT 'pending',
-    sampling_user   VARCHAR(100),
-    sampling_date   DATETIME,
-    exp_date        DATE,
-    notes           TEXT,
-    imported_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
-    source          VARCHAR(50) DEFAULT 'manual'
+    lot_id          INT NOT NULL,
+    std_number      TINYINT NOT NULL,               -- 1-6
+    std_value       DECIMAL(10,4),                  -- 0, 15, 35, 60
+    test_number     INT,                            -- progressivo test
+    test_type       ENUM('VALID','OLD_A','OLD_B','OLD_C','OLD_D','P_FINAL','P_PROD') NOT NULL,
+    qc_date         DATE,
+    qc_time         TIME,
+    prod_date       DATE,
+    prod_time       TIME,
+    prod_operator   VARCHAR(50),
+    head_number     TINYINT,
+    -- Colonne meter: identificate per posizione (12-15), non per nome (varia tra file)
+    meter1_reading  DECIMAL(10,4),
+    meter2_reading  DECIMAL(10,4),
+    meter3_reading  DECIMAL(10,4),
+    meter4_reading  DECIMAL(10,4),
+    spectr_abs      DECIMAL(10,6),
+    ph1             DECIMAL(6,3),
+    ph2             DECIMAL(6,3),
+    ph3             DECIMAL(6,3),
+    turbidity       DECIMAL(10,4),
+    weight_mg       DECIMAL(10,2),
+    reagent_set     TINYINT,
+    qc_operator     VARCHAR(50),
+    correction      VARCHAR(100),
+    note            TEXT,
+    FOREIGN KEY (lot_id) REFERENCES production_lots(id) ON DELETE CASCADE
 );
 
-CREATE INDEX idx_qc_date ON quality_data(record_date);
-CREATE INDEX idx_qc_product ON quality_data(product_code);
-CREATE INDEX idx_qc_result ON quality_data(result);
+CREATE INDEX idx_qc_lot ON qc_readings(lot_id);
+CREATE INDEX idx_qc_date ON qc_readings(qc_date);
+CREATE INDEX idx_qc_type ON qc_readings(test_type);
 
-CREATE TABLE quality_parameters (
+-- Cache distribuzione sigma per lotto/STD (pre-calcolata per performance)
+CREATE TABLE lot_sigma_distribution (
+    id                  INT AUTO_INCREMENT PRIMARY KEY,
+    lot_id              INT NOT NULL,
+    std_number          TINYINT NOT NULL,
+    total_tests         INT DEFAULT 0,
+    count_within_1sigma INT DEFAULT 0,
+    pct_within_1sigma   DECIMAL(6,2),               -- <1σ → VERDE
+    count_1to2_sigma    INT DEFAULT 0,
+    pct_1to2_sigma      DECIMAL(6,2),               -- 1-2σ → BLU
+    count_2to3_sigma    INT DEFAULT 0,
+    pct_2to3_sigma      DECIMAL(6,2),               -- 2-3σ → GIALLO
+    count_beyond_3sigma INT DEFAULT 0,
+    pct_beyond_3sigma   DECIMAL(6,2),               -- >3σ → fuori spec
+    calculated_at       DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (lot_id) REFERENCES production_lots(id) ON DELETE CASCADE,
+    UNIQUE KEY uk_lsd (lot_id, std_number)
+);
+
+-- Cache medie cumulative per control chart
+CREATE TABLE lot_running_averages (
     id              INT AUTO_INCREMENT PRIMARY KEY,
-    quality_data_id INT NOT NULL,
-    parameter_name  VARCHAR(50) NOT NULL,
-    expected_value  DECIMAL(12,4),
-    measured_value  DECIMAL(12,4),
-    tolerance_min   DECIMAL(12,4),
-    tolerance_max   DECIMAL(12,4),
-    unit            VARCHAR(20),
-    is_pass         BOOLEAN,
-    FOREIGN KEY (quality_data_id) REFERENCES quality_data(id) ON DELETE CASCADE
+    lot_id          INT NOT NULL,
+    std_number      TINYINT NOT NULL,
+    running_avg     DECIMAL(10,6),
+    calculated_at   DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+    FOREIGN KEY (lot_id) REFERENCES production_lots(id) ON DELETE CASCADE,
+    UNIQUE KEY uk_lra (lot_id, std_number)
 );
 
--- ============================================
--- DATI CONFEZIONAMENTO (PACKING)
--- ============================================
-
-CREATE TABLE packing_data (
+-- Limiti sigma per control chart (configurazione per hanna_code + STD)
+CREATE TABLE control_chart_limits (
     id              INT AUTO_INCREMENT PRIMARY KEY,
-    lot_code        VARCHAR(30) NOT NULL,
-    fg_code         VARCHAR(30) NOT NULL,
-    tactile         VARCHAR(30),
-    line            VARCHAR(10),
-    status          ENUM('in_progress','completed','delayed','critical') DEFAULT 'completed',
-    elapsed_seconds INT DEFAULT 0,
-    pcs_on_pallet   INT DEFAULT 0,
-    packing_operator VARCHAR(150),
-    exp_date        DATE,
-    started_at      DATETIME,
-    completed_at    DATETIME,
-    claims          TEXT,
-    imported_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
-    source          VARCHAR(50) DEFAULT 'manual'
+    hanna_code_id   INT NOT NULL,
+    std_number      TINYINT NOT NULL,
+    base_value      DECIMAL(10,6),
+    sigma_1_low     DECIMAL(10,6),
+    sigma_1_high    DECIMAL(10,6),
+    sigma_2_low     DECIMAL(10,6),
+    sigma_2_high    DECIMAL(10,6),
+    sigma_3_low     DECIMAL(10,6),
+    sigma_3_high    DECIMAL(10,6),
+    FOREIGN KEY (hanna_code_id) REFERENCES hanna_codes(id) ON DELETE CASCADE,
+    UNIQUE KEY uk_ccl (hanna_code_id, std_number)
 );
 
-CREATE TABLE packing_sfg (
+-- ============================================
+-- MODULO BUFFER PRODUCTION (Buffer Statistic xlsx)
+-- ============================================
+
+CREATE TABLE buffer_production (
     id              INT AUTO_INCREMENT PRIMARY KEY,
-    packing_data_id INT NOT NULL,
-    sfg_position    TINYINT NOT NULL,               -- 1-7
-    sfg_code        VARCHAR(50),
-    sfg_lot         VARCHAR(30),
-    sfg_quantity    INT,
-    sfg_exp_date    DATE,
-    FOREIGN KEY (packing_data_id) REFERENCES packing_data(id) ON DELETE CASCADE
+    recipe_code     VARCHAR(20),                    -- 'C163', 'C166'
+    ph_value        DECIMAL(5,2) NOT NULL,          -- 1.68, 4.01, 7.01, 10.01
+    product_codes   TEXT,                           -- 'HI5001-01;HI5001-02...' multi-valore
+    lot_number      VARCHAR(20) NOT NULL,
+    production_date DATE,
+    quantity_kg     DECIMAL(10,2),
+    first_qc_failed VARCHAR(100),                   -- valore QC fallito (misto testo/numero)
+    cm_description  VARCHAR(255),
+    cm_code         VARCHAR(20),
+    cm_grams        DECIMAL(10,4),
+    cm_percentage   DECIMAL(12,8),                  -- cm_grams / (quantity_kg * 1000)
+    source_filename VARCHAR(255),
+    imported_at     DATETIME DEFAULT CURRENT_TIMESTAMP
 );
 
-CREATE INDEX idx_pack_date ON packing_data(completed_at);
-CREATE INDEX idx_pack_fg ON packing_data(fg_code);
+CREATE INDEX idx_buf_date ON buffer_production(production_date);
+CREATE INDEX idx_buf_ph ON buffer_production(ph_value);
 
--- ============================================
--- DATI STOCK / MAGAZZINO
--- ============================================
-
-CREATE TABLE stock_data (
+-- Lookup materiali di correzione
+CREATE TABLE correction_materials (
     id              INT AUTO_INCREMENT PRIMARY KEY,
-    stock_code      VARCHAR(50) NOT NULL,
-    line            VARCHAR(10),
-    lot             VARCHAR(30),
-    iso             VARCHAR(30),
-    exp_date        DATE,
-    quantity        INT DEFAULT 0,
-    standard_value  DECIMAL(10,2),
-    coverage        DECIMAL(10,2),
-    location_hall   VARCHAR(30),
-    shelf           VARCHAR(20),
-    recipe          VARCHAR(30),
-    snapshot_date   DATE NOT NULL,                  -- data dello snapshot
-    imported_at     DATETIME DEFAULT CURRENT_TIMESTAMP,
-    source          VARCHAR(50) DEFAULT 'manual'
+    cm_code         VARCHAR(20) NOT NULL UNIQUE,
+    cm_name         VARCHAR(255),
+    cas_number      VARCHAR(30),
+    used_in_ph      TEXT                            -- es. 'pH 4.01, pH 7.01'
 );
 
-CREATE INDEX idx_stock_date ON stock_data(snapshot_date);
-CREATE INDEX idx_stock_code ON stock_data(stock_code);
-
 -- ============================================
--- STATISTICHE PRECALCOLATE (CACHE)
+-- MODULO PREPARATION LIST (PREP files)
 -- ============================================
 
-CREATE TABLE statistics_cache (
+-- Batch di preparazione (da ogni file PREP_*.xlsx)
+CREATE TABLE preparation_batches (
     id              INT AUTO_INCREMENT PRIMARY KEY,
-    stat_type       VARCHAR(50) NOT NULL,           -- production_daily, qc_pass_rate, etc.
-    period_start    DATE NOT NULL,
-    period_end      DATE NOT NULL,
-    dimensions      JSON,                           -- {"line": "L58", "product": "HI97700B"}
-    metrics         JSON,                           -- {"total": 1500, "avg": 75.5, "stddev": 2.3}
-    calculated_at   DATETIME DEFAULT CURRENT_TIMESTAMP,
-    UNIQUE KEY uk_stat (stat_type, period_start, period_end, dimensions(200))
+    recipe_code     VARCHAR(30) NOT NULL,           -- 'CP-B051', 'B036-SOL.A'
+    batch_type      ENUM('CP','SOL') NOT NULL,      -- CP = prodotto finito, SOL = intermedio
+    description     VARCHAR(255),
+    production_line VARCHAR(20),                    -- 'L56'
+    revision        DECIMAL(4,2),
+    expiry_years    VARCHAR(10),
+    density         DECIMAL(8,4),
+    preparation_date DATE,
+    batch_number    TINYINT,                        -- 1 o 2 (batch nella stessa settimana)
+    planned_week    VARCHAR(10),                    -- 'ww/yyyy' es. '10/2024'
+    actual_week     VARCHAR(10),
+    planning_reference VARCHAR(50),
+    operator        VARCHAR(50),
+    exp_date        VARCHAR(10),                    -- 'mm/yyyy'
+    mix_lot_number  INT,                            -- solo per SOL: Preparation Lot (Mix)
+    source_filename VARCHAR(255),
+    imported_at     DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_prep_recipe ON preparation_batches(recipe_code);
+CREATE INDEX idx_prep_date ON preparation_batches(preparation_date);
+CREATE INDEX idx_prep_week ON preparation_batches(actual_week);
+
+-- Prodotti Hanna generati da ogni batch (Hanna Code Table nei PREP files CP)
+CREATE TABLE preparation_hanna_codes (
+    id              INT AUTO_INCREMENT PRIMARY KEY,
+    batch_id        INT NOT NULL,
+    hanna_code      VARCHAR(30) NOT NULL,           -- 'HI3812-0', 'HI772S', 'DEMINERAL 10'
+    product_name    VARCHAR(255),
+    volume_weight   DECIMAL(10,2),
+    unit            VARCHAR(10),                    -- 'ml', 'g', 'mL'
+    qty_to_produce  INT,
+    lot_number      INT,
+    FOREIGN KEY (batch_id) REFERENCES preparation_batches(id) ON DELETE CASCADE
 );
 
 -- ============================================
--- CONFIGURAZIONE APPLICAZIONE
--- (Sostituisce electron-store)
+-- CONFIGURAZIONE E LOG
 -- ============================================
 
 CREATE TABLE app_config (
@@ -884,15 +957,11 @@ CREATE TABLE app_config (
     updated_at      DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
 );
 
--- ============================================
--- IMPORTAZIONI
--- ============================================
-
 CREATE TABLE import_log (
     id              INT AUTO_INCREMENT PRIMARY KEY,
     filename        VARCHAR(255) NOT NULL,
-    file_type       ENUM('csv','xlsx','json') NOT NULL,
-    target_table    VARCHAR(50) NOT NULL,
+    file_type       ENUM('xlsx','csv','json') NOT NULL,
+    module          ENUM('REAGENTI_QC','BUFFER_PRODUCTION','PREPARATION_LIST','OTHER'),
     rows_imported   INT DEFAULT 0,
     rows_skipped    INT DEFAULT 0,
     rows_errors     INT DEFAULT 0,
@@ -908,16 +977,14 @@ CREATE TABLE import_log (
 -- DATI INIZIALI
 -- ============================================
 
--- Admin di default (password: admin — da cambiare al primo accesso)
 INSERT INTO users (username, password_hash, full_name, role) VALUES
 ('admin', '$2a$10$placeholder_hash_change_me', 'Administrator', 'admin');
 
--- Configurazione di default
 INSERT INTO app_config (config_key, config_value, description) VALUES
 ('general.language', '"en"', 'Lingua predefinita'),
 ('general.dateFormat', '"dd/MM/yyyy"', 'Formato data'),
 ('general.theme', '"light"', 'Tema UI (light/dark)'),
-('stats.defaultPeriod', '"30d"', 'Periodo predefinito per le statistiche'),
+('stats.defaultTestTypes', '["P_FINAL","P_PROD"]', 'TEST types usati per calcoli sigma'),
 ('stats.refreshInterval', '300', 'Intervallo refresh automatico (secondi)'),
 ('export.companyName', '"Hanna Instruments"', 'Nome azienda per report'),
 ('export.logoPath', '"/public/logo.svg"', 'Path logo per report');
@@ -925,17 +992,16 @@ INSERT INTO app_config (config_key, config_value, description) VALUES
 
 ### 7.3 Conteggio tabelle
 
-| Area                  | Tabelle | Note                                |
-| --------------------- | ------- | ----------------------------------- |
-| Auth / Users          | 2       | users, audit_log                    |
-| Production            | 1       | production_data                     |
-| Quality Control       | 2       | quality_data, quality_parameters    |
-| Packing               | 2       | packing_data, packing_sfg           |
-| Stock                 | 1       | stock_data                          |
-| Statistics Cache      | 1       | statistics_cache                    |
-| Config                | 1       | app_config                          |
-| Import                | 1       | import_log                          |
-| **Totale**            | **11**  | Espandibile a 20-25                 |
+| Area                    | Tabelle | Tabelle                                          |
+| ----------------------- | ------- | ------------------------------------------------ |
+| Auth / Users            | 2       | users, audit_log                                 |
+| Anagrafica              | 2       | hanna_codes, product_standards                   |
+| Reagenti QC             | 4       | production_lots, qc_readings, lot_sigma_distribution, lot_running_averages |
+| Control Chart           | 1       | control_chart_limits                             |
+| Buffer Production       | 2       | buffer_production, correction_materials          |
+| Preparation List        | 2       | preparation_batches, preparation_hanna_codes     |
+| Config / Log            | 2       | app_config, import_log                           |
+| **Totale**              | **15**  | Espandibile con tabelle cache aggiuntive         |
 
 ---
 
@@ -945,87 +1011,84 @@ INSERT INTO app_config (config_key, config_value, description) VALUES
 
 **Scopo**: Vista d'insieme con KPI principali e grafici riassuntivi.
 
-**Componenti** (tutti con ReCharts, come in MicroDens):
-- KPI Cards: Produzione totale, QC Pass Rate, Stock critico, Packing efficienza
-- Grafico produzione giornaliera (BarChart)
-- Grafico andamento QC (LineChart)
-- Grafico distribuzione stock (PieChart)
-- Tabella ultime attivita' / alert
+**Componenti** (tutti con Apache ECharts):
+- KPI Cards: Hanna Codes tracciati, lotti QC nel mese, % letture entro 1σ, alert lotti >3σ
+- Control Chart overview: trend ultime medie per prodotti attivi
+- Sigma distribution: stacked bar dei lotti piu' recenti
+- Tabella alert: ultimi lotti con letture fuori 3σ
 
 **Filtri globali**:
-- Periodo temporale (oggi, 7gg, 30gg, personalizzato)
-- Linea produttiva
-- Prodotto
+- Periodo temporale (30gg, 90gg, personalizzato)
+- Hanna Code / prodotto
+- TEST type (P/Final, P/Prod, Valid...)
 
-### 8.2 Production Stats
+### 8.2 Reagenti QC Statistics
 
-**Scopo**: Analisi dettagliata della produzione.
-
-**Metriche**:
-- Produzione per linea / per prodotto / per turno
-- Quantita' pianificata vs prodotta (rendimento)
-- Trend produttivo nel tempo
-- Scarti e quantita' rifiutate
-- Tempi di produzione medi
-
-**Grafici**:
-- BarChart: Produzione per linea
-- LineChart: Trend giornaliero/settimanale/mensile
-- AreaChart: Pianificato vs Prodotto
-- Scatter: Correlazione quantita'/tempo
-
-### 8.3 Quality Stats
-
-**Scopo**: Analisi controllo qualita'.
+**Scopo**: Modulo principale — statistiche sigma sui file Chemical QC (da Gibertini software).
+Un file per lotto per prodotto: letture da 1-4 meter per ogni Standard.
 
 **Metriche**:
-- QC Pass Rate (% superamento) globale e per prodotto
-- Distribuzione per tipo QC (First, During, Final)
-- Parametri fuori specifica (frequenza e entita')
-- Tempo medio tra campionamento e risultato
-- Trend qualita' nel tempo
+- Distribuzione sigma per lotto per STD: <1σ (verde), 1-2σ (blu), 2-3σ (giallo), >3σ
+- Medie cumulative lot-by-lot per ogni STD (running average per control chart)
+- Totale test per lotto, per STD, per operatore QC
+- Peso tablet: deviazione da ref_weight per lotto
+- σ = 50% Hanna Tolerance (valore fisso, NON deviazione standard statistica)
 
 **Grafici**:
-- PieChart: Pass/Fail ratio
-- LineChart: Andamento pass rate nel tempo
-- BarChart: Parametri piu' critici
-- Heatmap: Qualita' per prodotto/periodo
+- **Control Chart (Shewhart)**: scatter letture + linea medie cumulative + bande sigma colorate. Un grafico per STD (es. 0, 15, 35, 60 ppm). Bande: 1σ verde, 2σ blu, 3σ giallo.
+- **Sigma Distribution**: 100% Stacked Bar per lotto. Colori: verde/blu/giallo/rosso.
+- **Gauge KPI**: % letture entro 1σ, 2σ, 3σ per lotto selezionato.
 
-### 8.4 Packing Stats
+**Filtri**:
+- Hanna Code (prodotto)
+- Standard (STD 1-6)
+- TEST type (P/Final, P/Prod, Valid, Old A/B/C/D)
+- Range lotti / range date
 
-**Scopo**: Analisi efficienza confezionamento.
+### 8.3 Buffer Production Statistics
+
+**Scopo**: Statistiche produzione soluzioni tampone pH (da Buffer Statistic xlsx).
 
 **Metriche**:
-- Tempo medio di confezionamento per prodotto
-- Distribuzione stati (verde/giallo/rosso)
-- Pezzi per pallet medi
-- Efficienza per operatore
-- Claims per prodotto/periodo
+- Quantita' prodotta per pH value (1.68, 4.01, 7.01, 10.01) nel tempo
+- % lotti con correzione CM per pH
+- Distribuzione CM usati per pH (quali materiali, quanti grammi, quale %)
+- Trend correzione CM nel tempo (media mobile)
 
 **Grafici**:
-- BarChart: Tempi per operatore
-- LineChart: Trend efficienza nel tempo
-- PieChart: Distribuzione stati
-- BarChart: Claims per categoria
+- LineChart: Trend cm_percentage per pH nel tempo
+- BarChart: Quantita' Kg prodotti per mese per pH
+- PieChart/Donut: Distribuzione CM codes per pH
+- AreaChart: Pianificato vs prodotto (se disponibile)
 
-### 8.5 Stock Analysis
+**Filtri**:
+- pH value (1.68 / 4.01 / 7.01 / 10.01)
+- CM Code
+- Range date
 
-**Scopo**: Analisi magazzino e scorte.
+### 8.4 Preparation List Statistics
+
+**Scopo**: Statistiche dai file PREP (Chemical Production) — compliance, operatori, ricette.
 
 **Metriche**:
-- Livelli stock attuali per prodotto
-- Prodotti in scadenza (alert)
-- Copertura stock (giorni rimanenti)
-- Rotazione magazzino
-- Trend giacenze nel tempo
+- Compliance settimane: planned week vs actual week per ricetta
+- Numero batch per ricetta per mese
+- Varianza pesi: (real_weight - theoretical_weight) / theoretical_weight
+- Distribuzione operatori per ricetta
+- Tracking lot number assegnati per prodotto
 
 **Grafici**:
-- BarChart: Stock per location/shelf
-- LineChart: Andamento giacenze
-- Gauge: Copertura stock
-- Treemap: Distribuzione per categoria
+- BarChart: Batch per settimana per linea
+- Scatter: Compliance planned vs actual week (delta settimane)
+- BarChart: Varianza peso per ricetta (media ± dev)
+- Timeline: Gantt-like visualizzazione batch nel tempo
 
-### 8.6 Trend Analysis
+**Filtri**:
+- Recipe Code (CP-B051, ecc.)
+- Operatore
+- Range settimane / date
+
+### 8.5 Trend Analysis
 
 **Scopo**: Analisi trend su periodi personalizzati.
 
@@ -1041,11 +1104,10 @@ INSERT INTO app_config (config_key, config_value, description) VALUES
 **Scopo**: Generazione report formali.
 
 **Template disponibili**:
-- Report produzione giornaliero/settimanale/mensile
-- Report QC con dettaglio parametri
-- Report stock con alert scadenze
-- Report packing con efficienza operatori
-- Report personalizzato (selezione metriche)
+- Report Reagenti QC: Control Chart + Sigma Distribution per prodotto/lotto
+- Report Buffer Production: trend correzioni CM per periodo e pH
+- Report Preparation List: compliance settimane, operatori, ricette
+- Report personalizzato (selezione metriche cross-modulo)
 
 **Formati di output**:
 - PDF (jsPDF + jspdf-autotable, come MicroDens)
@@ -1056,17 +1118,19 @@ INSERT INTO app_config (config_key, config_value, description) VALUES
 
 **Scopo**: Importazione dati da fonti esterne.
 
-**Formati supportati**:
-- CSV (con selezione separatore e mapping colonne)
-- Excel (.xlsx)
-- JSON
+**Formati supportati**: Excel `.xlsx` (tutti i file sorgente sono Excel)
+
+**Moduli di import**:
+- **Chemical QC** (`CP-R14_HI93705B-0_LOT0676_*.xlsx`): letture QC raw per lotto, Standards, meter readings. Parser per posizione colonne (non per nome — nomi meter variano tra file).
+- **Buffer Statistic** (`Buffer Preparation and Correction Statistic*.xlsx`): fogli pH 1.68/4.01/7.01/10.01, dati correzioni CM.
+- **Preparation PREP** (`PREP_CP-B*.xlsx`, `PREP_B*-SOL.*.xlsx`): parsing layout fisso (posizioni righe note), estrazione Hanna Code Table.
 
 **Funzionalita'**:
-- Preview dati prima dell'importazione
-- Mapping colonne sorgente → colonne DB
-- Validazione dati con report errori
-- Log importazioni con possibilita' di rollback
-- Import schedulato (opzionale)
+- Upload singolo file o batch (cartella)
+- Preview struttura rilevata + dati da importare
+- Validazione (test_type validi, range valori, date coerenti)
+- Log importazioni con rollback
+- Deduplicazione automatica (stesso file gia' importato)
 
 ### 8.9 Settings
 
@@ -1100,10 +1164,8 @@ shadcn/ui usa CSS custom properties per il tema, non un oggetto JavaScript
 come MUI. Questo rende il dark mode automatico e le personalizzazioni immediate.
 
 ```css
-/* src/globals.css */
-@tailwind base;
-@tailwind components;
-@tailwind utilities;
+/* src/globals.css — Tailwind v4: si usa @import, non @tailwind directives */
+@import "tailwindcss";
 
 @layer base {
   :root {
@@ -1238,14 +1300,14 @@ export function Dashboard() {
                     <Card className="border-l-4 border-l-primary">
                         <CardHeader className="flex flex-row items-center justify-between pb-2">
                             <CardTitle className="text-sm font-medium text-muted-foreground">
-                                Produzione Oggi
+                                Lotti QC (30gg)
                             </CardTitle>
                             <Package className="h-4 w-4 text-primary" />
                         </CardHeader>
                         <CardContent>
-                            <div className="text-2xl font-bold">1,523</div>
+                            <div className="text-2xl font-bold">47</div>
                             <p className="text-xs text-muted-foreground">
-                                <span className="text-green-500">+12%</span> vs ieri
+                                <span className="text-green-500">+3</span> vs mese precedente
                             </p>
                         </CardContent>
                     </Card>
@@ -1255,13 +1317,13 @@ export function Dashboard() {
                     <Card className="border-l-4 border-l-green-500">
                         <CardHeader className="flex flex-row items-center justify-between pb-2">
                             <CardTitle className="text-sm font-medium text-muted-foreground">
-                                QC Pass Rate
+                                Entro 1σ (30gg)
                             </CardTitle>
                             <CheckCircle className="h-4 w-4 text-green-500" />
                         </CardHeader>
                         <CardContent>
-                            <div className="text-2xl font-bold">98.2%</div>
-                            <Badge variant="secondary" className="mt-1">Eccellente</Badge>
+                            <div className="text-2xl font-bold">84.3%</div>
+                            <Badge variant="secondary" className="mt-1">Target &gt;68%</Badge>
                         </CardContent>
                     </Card>
                 </motion.div>
@@ -1274,7 +1336,7 @@ export function Dashboard() {
                 <motion.div variants={itemVariants}>
                     <Card>
                         <CardHeader>
-                            <CardTitle>Produzione Settimanale</CardTitle>
+                            <CardTitle>Sigma Distribution — Ultimi 10 Lotti</CardTitle>
                         </CardHeader>
                         <CardContent>
                             <ReactECharts
@@ -1312,7 +1374,7 @@ export function Dashboard() {
                 <motion.div variants={itemVariants}>
                     <Card>
                         <CardHeader>
-                            <CardTitle>QC Pass Rate Trend</CardTitle>
+                            <CardTitle>Running Average — STD 15 ppm</CardTitle>
                         </CardHeader>
                         <CardContent>
                             <ReactECharts
@@ -1648,11 +1710,11 @@ COMPANY_NAME=Hanna Instruments
 
 ### Fase 1 — Fondamenta (Settimane 1-3)
 
-- [ ] Inizializzazione progetto (Vite + React + TS + MUI)
+- [ ] Inizializzazione progetto (Vite + React + TS + shadcn/ui + Tailwind CSS 4)
 - [ ] Setup server Express con TypeScript
 - [ ] Connessione MariaDB (mysql2 + pool)
 - [ ] AuthService + JWT (tradotto da AuthManager MicroDens)
-- [ ] Layout base con MUI (navbar Hanna blue, sidebar)
+- [ ] Layout base con shadcn/ui (navbar Hanna blue, sidebar)
 - [ ] ThemeContext e i18n (copiati da MicroDens)
 - [ ] Docker Compose (app + MariaDB)
 
@@ -1665,11 +1727,11 @@ COMPANY_NAME=Hanna Instruments
 
 ### Fase 3 — Moduli Statistici (Settimane 6-10)
 
-- [ ] Dashboard con KPI cards e grafici ReCharts
-- [ ] Production Stats (metriche + grafici)
-- [ ] Quality Stats (pass rate, parametri, trend)
-- [ ] Packing Stats (efficienza, tempi, claims)
-- [ ] Stock Analysis (livelli, scadenze, copertura)
+- [ ] Dashboard con KPI cards e grafici Apache ECharts
+- [ ] Reagenti QC Statistics (Control Chart, distribuzione sigma, letture per lotto)
+- [ ] Buffer Production Statistics (trend correzioni, quantita' prodotte per pH)
+- [ ] Preparation List (statistiche prep per ricetta, compliance settimane)
+- [ ] Trend Analysis cross-modulo
 
 ### Fase 4 — Export e Report (Settimane 11-12)
 
