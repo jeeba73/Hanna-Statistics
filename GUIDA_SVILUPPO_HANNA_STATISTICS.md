@@ -7,14 +7,14 @@
 
 ## 1. Installazioni sul tuo PC (una volta sola)
 
-### 1.1 Node.js 20 LTS
+### 1.1 Node.js 22 LTS
 
 Scarica e installa da: **https://nodejs.org** (bottone LTS, quello verde)
 
 Verifica dopo l'installazione (apri nuovo PowerShell):
 ```powershell
-node --version    # deve dire v20.x.x
-npm --version     # deve dire 10.x.x
+node --version    # deve dire v22.x.x
+npm --version     # deve dire 11.x.x
 ```
 
 ### 1.2 Docker Desktop
@@ -54,29 +54,39 @@ hanna-statistics/
 │   │   ├── pages/           # Pagine (Dashboard, QC Statistics, Buffer, ecc.)
 │   │   ├── services/        # Chiamate API al backend (fetch)
 │   │   ├── i18n/            # Traduzioni EN/RO
+│   │   ├── lib/             # Utility (cn() per classnames)
 │   │   └── App.tsx
 │   ├── index.html
 │   ├── package.json
 │   ├── vite.config.ts
-│   └── tailwind.config.ts
+│   └── components.json      # Configurazione shadcn/ui
 │
 ├── server/                  # Backend Node.js (API + logica)
 │   ├── src/
-│   │   ├── routes/          # Endpoint API (GET /api/lots, ecc.)
+│   │   ├── routes/          # Endpoint API (GET /api/health, ecc.)
 │   │   ├── services/        # Logica business (import Excel, calcoli sigma)
-│   │   ├── models/          # Query database
-│   │   └── server.ts
+│   │   ├── database/        # Connessione DB + migrations + seed
+│   │   │   ├── connection.ts
+│   │   │   ├── migrations/  # 7 file SQL (001-007, schema 15 tabelle)
+│   │   │   └── seed/        # Dati iniziali
+│   │   ├── app.ts           # Express app (middleware, routes, static)
+│   │   └── server.ts        # Entry point (dotenv + avvio)
 │   ├── package.json
 │   └── tsconfig.json
+│
+├── shared/                  # Tipi TypeScript condivisi client/server
+│   └── types/
+│       └── index.ts
 │
 ├── docker/
 │   ├── docker-compose.yml       # Per il server (produzione/demo)
 │   ├── docker-compose.dev.yml   # Per lo sviluppo locale
-│   └── Dockerfile
+│   └── Dockerfile               # Multi-stage build (3 stage)
 │
+├── .env                     # Variabili ambiente (git-ignored)
+├── .env.example             # Template per .env
 ├── .gitignore
-├── package.json             # Root package.json (script condivisi)
-└── README.md
+└── package.json             # Root package.json (script condivisi)
 ```
 
 ### Confronto con Electron (quello che conosci)
@@ -96,22 +106,30 @@ electron-builder  → packaging       docker/    → containerizzazione
 
 ### 3.1 Sviluppo locale (il tuo PC, ogni giorno)
 
+Metodo rapido (un solo comando dalla root del progetto):
+```powershell
+cd hanna-statistics
+npm run dev
+# Avvia tutto: MariaDB (Docker) + Backend (tsx) + Frontend (Vite)
+```
+
+Oppure manualmente in 3 terminali separati:
 ```
 Terminal 1 — Database (Docker)
 ───────────────────────────────
 cd hanna-statistics
-docker compose -f docker/docker-compose.dev.yml up db
+npm run db:up
 # MariaDB parte su localhost:3306
 
 Terminal 2 — Backend
 ───────────────────────────────
-cd server
+cd hanna-statistics/server
 npm run dev
-# Express parte su localhost:3000, hot reload con nodemon
+# Express parte su localhost:3000, hot reload con tsx watch
 
 Terminal 3 — Frontend
 ───────────────────────────────
-cd client
+cd hanna-statistics/client
 npm run dev
 # Vite parte su localhost:5173, hot reload immediato
 # Proxy automatico: /api/* → localhost:3000
@@ -131,9 +149,10 @@ git add . && git commit -m "descrizione modifica" && git push
 ssh root@178.104.16.85
 
 # Sul server
-cd /opt/hanna-statistics
+cd /opt/Hanna-Statistics
 git pull
-docker compose up -d --build
+cd hanna-statistics
+docker compose -f docker/docker-compose.yml up -d --build
 
 # Fine. L'app è aggiornata su http://demo.bilsoft.it
 ```
@@ -216,15 +235,17 @@ quindi usi un "connection pool" per connetterti via rete invece di aprire un fil
 ### Sviluppo locale
 ```powershell
 # Primo setup (una volta)
-git clone <repo> hanna-statistics
-cd hanna-statistics
-cd client && npm install && cd ..
-cd server && npm install && cd ..
+git clone https://github.com/jeeba73/Hanna-Statistics.git
+cd Hanna-Statistics/hanna-statistics
+npm run install:all    # installa deps root + client + server
 
-# Ogni giorno
-docker compose -f docker/docker-compose.dev.yml up db     # avvia MariaDB
-cd server && npm run dev                                    # avvia backend
-cd client && npm run dev                                    # avvia frontend
+# Ogni giorno (metodo rapido)
+npm run dev            # avvia tutto (Docker DB + backend + frontend)
+
+# Oppure manualmente
+npm run db:up                                               # avvia MariaDB
+cd server && npm run dev                                     # avvia backend
+cd client && npm run dev                                     # avvia frontend
 ```
 
 ### Server Hetzner
@@ -232,13 +253,17 @@ cd client && npm run dev                                    # avvia frontend
 # Collegamento
 ssh root@178.104.16.85
 
+# Deploy / aggiornamento
+cd /opt/Hanna-Statistics && git pull
+cd hanna-statistics
+docker compose -f docker/docker-compose.yml up -d --build
+
 # Comandi utili sul server
-docker compose up -d --build     # avvia/ricostruisce tutto
-docker compose logs -f app       # vedi log dell'app in tempo reale
-docker compose logs -f db        # vedi log del database
-docker compose down              # ferma tutto
-docker compose restart app       # riavvia solo l'app
-docker ps                        # vedi container attivi
+docker logs hanna-stats-app                # vedi log dell'app
+docker logs hanna-stats-db                 # vedi log del database
+docker compose -f docker/docker-compose.yml down    # ferma tutto
+docker compose -f docker/docker-compose.yml restart app  # riavvia solo l'app
+docker ps                                  # vedi container attivi
 ```
 
 ### Git (già lo sai, ma per completezza)
@@ -288,7 +313,7 @@ git push origin main
 
 | Cosa | URL / Indirizzo |
 |------|----------------|
-| **Demo pubblica** | http://demo.bilsoft.it (quando DNS propaga) |
+| **Demo pubblica** | http://demo.bilsoft.it |
 | **Demo via IP** | http://178.104.16.85 |
 | **Server SSH** | `ssh root@178.104.16.85` |
 | **Hetzner Console** | https://console.hetzner.cloud |
@@ -302,3 +327,28 @@ git push origin main
 > **Regola d'oro:** se una cosa funziona in locale su localhost:5173,
 > funzionerà identica su demo.bilsoft.it dopo il deploy.
 > L'unica differenza è dove gira il server. Il codice è lo stesso.
+
+---
+
+## 10. Stack Tecnologico (versioni attuali)
+
+| Componente | Versione | Note |
+|---|---|---|
+| **Node.js** | 22 LTS | Runtime + Docker base image |
+| **React** | 19 | Frontend UI |
+| **TypeScript** | ~5.7 | Ovunque (client + server + shared) |
+| **Vite** | 6 | Build tool + dev server client |
+| **Tailwind CSS** | v4 | Styling (plugin `@tailwindcss/vite`, niente config file) |
+| **shadcn/ui** | new-york style | Componenti UI (Radix UI sotto) |
+| **Express** | 4 | Backend API |
+| **MariaDB** | 10.11 | Database (Docker) |
+| **ECharts** | 5.5 | Grafici statistici |
+| **i18next** | — | Internazionalizzazione EN/RO |
+| **tsx** | — | Dev runner per TypeScript server (al posto di nodemon) |
+
+### Note importanti sullo stack
+
+- **ESM**: Il server usa `"type": "module"`. `__dirname` non esiste in ESM.
+  Usare sempre: `fileURLToPath(import.meta.url)` + `path.dirname()`
+- **Tailwind v4**: Niente `tailwind.config.ts`. La config è nel CSS via `@theme` e il plugin Vite `@tailwindcss/vite`.
+- **shadcn/ui**: Configurato in `components.json`. I componenti si installano con `npx shadcn@latest add <nome>`.
