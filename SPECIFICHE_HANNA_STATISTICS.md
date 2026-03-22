@@ -1551,7 +1551,7 @@ services:
       context: ..
       dockerfile: docker/Dockerfile
     ports:
-      - "83:3000"                     # Accessibile su porta 83
+      - "80:3000"                     # Accessibile su porta 83
     environment:
       - NODE_ENV=production
       - DB_HOST=db
