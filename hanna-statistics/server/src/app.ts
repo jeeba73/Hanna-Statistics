@@ -20,7 +20,7 @@ app.use(express.urlencoded({ extended: true }));
 app.use('/api', healthRouter);
 
 // Serve frontend static files in production
-const publicDir = path.resolve(process.cwd(), 'public');
+const publicDir = path.resolve(__dirname, '../public');
 app.use(express.static(publicDir));
 
 // SPA fallback: serve index.html for all non-API routes
