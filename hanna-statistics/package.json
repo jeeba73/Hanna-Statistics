@@ -1,0 +1,21 @@
+{
+  "name": "hanna-statistics",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Hanna Statistics — Web app for statistical analysis (Hanna Instruments)",
+  "scripts": {
+    "dev": "concurrently -n client,server -c blue,green \"npm run dev:client\" \"npm run dev:server\"",
+    "dev:client": "cd client && npm run dev",
+    "dev:server": "cd server && npm run dev",
+    "build": "cd client && npm run build && cd ../server && npm run build",
+    "start": "cd server && npm start",
+    "db:up": "docker compose -f docker/docker-compose.dev.yml up db -d",
+    "db:down": "docker compose -f docker/docker-compose.dev.yml down",
+    "db:logs": "docker compose -f docker/docker-compose.dev.yml logs -f db",
+    "install:all": "npm install && cd client && npm install && cd ../server && npm install",
+    "lint": "cd client && npm run lint && cd ../server && npm run lint"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.0"
+  }
+}

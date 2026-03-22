@@ -1,0 +1,26 @@
+# docker-compose.dev.yml — Solo MariaDB per sviluppo locale
+# Uso: docker compose -f docker/docker-compose.dev.yml up db -d
+
+services:
+  db:
+    image: mariadb:10.11
+    container_name: hanna-stats-db
+    restart: unless-stopped
+    ports:
+      - "3306:3306"
+    environment:
+      MARIADB_ROOT_PASSWORD: rootpass2026
+      MARIADB_DATABASE: hanna_statistics
+      MARIADB_USER: hanna_stats
+      MARIADB_PASSWORD: HannaStats2026!
+    volumes:
+      - hanna_db_data:/var/lib/mysql
+      - ../server/src/database/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  hanna_db_data:
